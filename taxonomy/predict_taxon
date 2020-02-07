@@ -1,0 +1,79 @@
+#! /disks/patric-common/runtime/bin/python3.7
+
+from keras.models import load_model
+from keras.utils import to_categorical
+import numpy as np
+import pickle
+import sys
+from sklearn.preprocessing import LabelEncoder
+import argparse
+from Bio import Entrez
+
+# os.environ["CUDA_VISIBLE_DEVICES"]="3"
+
+# process flags
+parser = argparse.ArgumentParser(description="Given a sequence for a seed protein, predict the species, genus, and family of the source genome")
+parser.add_argument("--input", 	"-i", 					help="Input: sequence for seed protein")
+parser.add_argument("--output", "-o", 	default=sys.stdout,		help="Output file. If not specified, prints to STDOUT")
+parser.add_argument("--length", "-l", 	default=607, 			help="Maximum length for seed protein")
+parser.add_argument("--dir", 	"-d",	default="./models", help="Directory containing files named species.h5, genus.h5, encoder_species.p, encoder_genus.p")
+args = parser.parse_args()
+
+sequence 	= args.input
+max_length 	= args.length
+prefix 		= args.dir
+out 		= args.output
+if out != sys.stdout:
+	out = open(out, "w")
+
+# embeddings
+aa_hash = {
+    'a': 1,         'b': 2,         'c': 3,         'd': 4,
+    'e': 5,         'f': 6,         'g': 7,         'h': 8,
+    'i': 9,         'j': 10,        'k': 11,        'l': 12,
+    'm': 13,        'n': 14,        'o': 15,        'p': 16,
+    'q': 17,        'r': 18,        's': 19,        't': 20,
+    'u': 21,        'v': 22,        'w': 23,        'x': 24,
+    'y': 25,        'z': 26}
+
+# convert AA to values by hash
+length = len(sequence)
+amino_acids = [aa_hash[aa.lower()] for aa in sequence]
+
+# add padding
+sequence = [0] * (max_length - length)
+sequence += amino_acids
+sequence = np.array(sequence)
+sequence = to_categorical(sequence, 26)
+sequence = np.reshape(sequence, (1, 26 * max_length))
+
+# load models and decoders
+ncbi_pred = ''
+print("about to start loading things")
+species_model = load_model(prefix+'/species.h5', compile=False) # compile false for faster load times
+print("loaded species_model")
+species_encoder = pickle.load(open(prefix+'/encoder_species.p', 'rb'))
+print("loaded species_encoder")
+species_pred = species_model.predict(sequence)
+
+if np.max(species_pred) < 0.9:
+	genus_model = load_model(prefix+'/genus.h5', compile=False)
+	genus_encoder = pickle.load(open(prefix+'/encoder_genus.p', 'rb'))
+	genus_pred = genus_model.predict(sequence)
+	if np.max(genus_pred) > 0.9:
+		ncbi_pred = genus_encoder.classes_[np.argmax(genus_pred)]
+		print("prediction level: genus", file=out)
+else:
+	ncbi_pred = species_encoder.classes_[np.argmax(species_pred)]
+	print("prediction level: species", file=out)
+
+if ncbi_pred != '':
+	Entrez.email = "rast@mcs.anl.gov"
+	handle1 = Entrez.esearch(db='taxonomy', term=ncbi_pred, mode='text', rettype='text')
+	record1 = Entrez.read(handle1)
+	ncbi_id = record1["IdList"][0]
+	handle2 = Entrez.efetch(db='taxonomy', id=ncbi_id, mode='text', rettype='text')
+	record2 = Entrez.read(handle2)
+	print(record2[0]["Lineage"], file=out)
+	print(record2[0]["ScientificName"], file=out)
+	print(record2[0]["TaxId"], file=out)

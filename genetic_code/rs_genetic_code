@@ -1,0 +1,44 @@
+#! /disks/patric-common/runtime/bin/perl
+
+use strict;
+use warnings;
+use Data::Dumper;
+use Getopt::Long::Descriptive;
+
+my ($opt, $usage) = describe_options(
+	'rs_genetic_code -i <input sequence> -o <output file>',
+	['input|i=s', 	"input pheS sequence", 			{required => 1}],
+	['output|o=s', 	"output file"],
+	['reps_path=s', 	"path to representatives",	{default => './200reps.code.tbl'}],
+	['rs_path=s', 	"path to rs.pm package",		{default => './rs.pm'}],
+	['help|h', 	"print usage message and exit", 	{shortcircuit => 1}]
+);
+
+my $reps_path = $opt->{'reps_path'};
+#print "reps_path = $reps_path\ncomplete\n";
+my $rs_path = $opt->{'rs_path'};
+
+require $rs_path;
+
+open my $fh, '<', $reps_path;
+my %code;
+while (<$fh>){
+	chomp $_;
+	my ($gen, $score, $seq, $code) = split "\t", $_;
+	$code{$gen} = $code;
+}
+close $fh;
+
+my $seq = $opt->{'input'};
+
+my $rows = &rs::read_in($reps_path);
+my $reps = &rs::rep_set($rows, {'load'=>1});
+my $closest_genome = &rs::closest_genome($seq, $reps)->[0];
+
+if ($opt->{'output'}){
+	open my $fh_out, '>', $opt->{'output'} or die "Can't write to file \'$opt->{'output'}\' [$!]\n" ;
+	print $fh_out $code{$closest_genome};
+}
+else{ 
+	print $code{$closest_genome}
+}
